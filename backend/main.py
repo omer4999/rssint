@@ -1,11 +1,11 @@
 """
 RSSINT – Real-Time Structured Intelligence Platform
-Day 4: Embedding-based multi-channel event clustering + hourly briefs.
+Embedding-based multi-channel event clustering + hourly briefs.
 
 Startup sequence:
 1. Validate settings from .env.
 2. Create / verify all ORM tables (idempotent).
-3. Load the SentenceTransformer embedding model (CPU, once).
+3. Initialize OpenAI embedding service.
 4. Start the Telegram client.
 5. Launch the background ingestion loop as an asyncio task.
 6. Register API routers.
@@ -77,41 +77,14 @@ def create_app() -> FastAPI:
             await conn.run_sync(Base.metadata.create_all)
         logger.info("Database schema verified / created.")
 
-        # --- Embedding model ---
-        # Import here so the heavy torch/transformers machinery is only
-        # loaded after the process is fully started (improves import time
-        # for tests / tooling that imports main without running the server).
-        logger.info(
-            "Loading SentenceTransformer model 'all-MiniLM-L6-v2'… "
-            "(first run downloads ~80 MB)"
-        )
-        from sentence_transformers import SentenceTransformer  # noqa: PLC0415
+        # --- Embedding service (OpenAI API) ---
+        from services import embedding_service as _emb_svc  # noqa: PLC0415
+        _emb_svc.init(settings.openai_api_key or "")
+        logger.info("Embedding service initialized.")
 
-        embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
-        logger.info("Embedding model loaded successfully.")
-
-        # --- LLM service (needs embedding model for dedup) ---
+        # --- LLM service (uses embedding service for dedup) ---
         from services import llm_service as _llm_svc  # noqa: PLC0415
-        _llm_svc.init(
-            session_factory,
-            settings.openai_api_key or "",
-            embedding_model=embedding_model,
-        )
-
-        # Warm up: run one dummy encode so torch JIT compilation and any
-        # internal caching happen now, not on the first real user request.
-        loop = asyncio.get_event_loop()
-        await loop.run_in_executor(
-            None,
-            lambda: embedding_model.encode(
-                ["warmup"],
-                batch_size=1,
-                show_progress_bar=False,
-                normalize_embeddings=True,
-                convert_to_numpy=True,
-            ),
-        )
-        logger.info("Embedding model warm-up complete.")
+        _llm_svc.init(session_factory, settings.openai_api_key or "")
 
         # --- Telegram ---
         telegram_service = TelegramService(
@@ -140,7 +113,7 @@ def create_app() -> FastAPI:
         logger.info("Development graph job launched.")
 
         dev_populate_task = asyncio.create_task(
-            run_developments_populate_loop(session_factory, embedding_model),
+            run_developments_populate_loop(session_factory),
             name="developments_populate_loop",
         )
         logger.info("Developments populate job launched (72h window).")
@@ -156,7 +129,6 @@ def create_app() -> FastAPI:
         app.state.settings = settings
         app.state.session_factory = session_factory
         app.state.telegram_service = telegram_service
-        app.state.embedding_model = embedding_model
 
         yield
 

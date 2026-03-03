@@ -17,7 +17,6 @@ from repositories import message_repository as repo
 from services.event_clustering_service import cluster_messages
 
 if TYPE_CHECKING:
-    from sentence_transformers import SentenceTransformer
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 logger = logging.getLogger(__name__)
@@ -28,7 +27,6 @@ _WINDOW_MINUTES: int = 72 * 60  # 72 hours
 
 async def populate_developments_events(
     session_factory: "async_sessionmaker[AsyncSession]",
-    embedding_model: "SentenceTransformer",
 ) -> None:
     """
     Fetch messages from the last 72 hours, cluster them, and create
@@ -45,7 +43,6 @@ async def populate_developments_events(
 
     clusters = await cluster_messages(
         messages=raw_messages,
-        model=embedding_model,
         window_minutes=_WINDOW_MINUTES,
     )
 
@@ -58,7 +55,6 @@ async def populate_developments_events(
 
 async def run_developments_populate_loop(
     session_factory: "async_sessionmaker[AsyncSession]",
-    embedding_model: "SentenceTransformer",
 ) -> None:
     """Run populate_developments_events every 6 hours."""
     logger.info(
@@ -68,7 +64,7 @@ async def run_developments_populate_loop(
     )
     while True:
         try:
-            await populate_developments_events(session_factory, embedding_model)
+            await populate_developments_events(session_factory)
         except asyncio.CancelledError:
             raise
         except Exception as exc:

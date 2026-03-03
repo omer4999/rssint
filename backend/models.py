@@ -153,7 +153,7 @@ class StructuredEvent(Base):
         Index("ix_events_locations_gin", "locations", postgresql_using="gin"),
     )
 
-    EMBEDDING_DIM = 384
+    EMBEDDING_DIM = 1536  # text-embedding-3-small
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
@@ -203,7 +203,7 @@ class StructuredEvent(Base):
     )
     embedding = mapped_column(
         JSONB, nullable=True,
-        comment="384-d sentence embedding (stored as JSON array) for dedup",
+        comment="1536-d OpenAI embedding (stored as JSON array) for dedup",
     )
     development_processed: Mapped[bool] = mapped_column(
         Boolean,

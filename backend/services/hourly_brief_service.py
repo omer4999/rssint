@@ -100,21 +100,10 @@ async def _build_summary(db: AsyncSession, minutes: int) -> str:
     if not raw_messages:
         return _FALLBACK_EMPTY
 
-    # We need the embedding model to cluster.  Import lazily.
     from services.event_clustering_service import cluster_messages
-
-    # The embedding model must be available at module level in the app —
-    # import is deferred so this file stays testable in isolation.
-    try:
-        import main as _main_mod
-        embedding_model = _main_mod.app.state.embedding_model
-    except Exception:
-        logger.warning("Cannot access embedding model for hourly brief.")
-        return _FALLBACK_ERROR
 
     clusters = await cluster_messages(
         messages=raw_messages,
-        model=embedding_model,
         window_minutes=minutes,
     )
 

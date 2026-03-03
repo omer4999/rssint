@@ -8,7 +8,7 @@ table keyed by a deterministic content hash.
 Event-level deduplication
 -------------------------
 Before inserting a new event, the service generates an embedding of the
-summary using the SentenceTransformer model and queries the ``events`` table
+summary using the OpenAI embeddings API and queries the ``events`` table
 for semantically similar events created in the last 12 hours.  If cosine
 similarity >= 0.88, the existing event is updated (last_seen, confidence,
 actors, locations) instead of creating a duplicate row.
@@ -40,7 +40,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from models import StructuredEvent
 
 if TYPE_CHECKING:
-    from sentence_transformers import SentenceTransformer
     from sqlalchemy.ext.asyncio import async_sessionmaker
 
 logger = logging.getLogger(__name__)
@@ -51,7 +50,6 @@ logger = logging.getLogger(__name__)
 
 _SESSION_FACTORY: "async_sessionmaker[AsyncSession] | None" = None
 _API_KEY: str = ""
-_EMBEDDING_MODEL: "SentenceTransformer | None" = None
 
 _CACHE: dict[str, str] = {}  # cluster_hash → JSON string
 _PENDING: set[str] = set()
@@ -148,17 +146,14 @@ Now analyze the following messages:
 def init(
     factory: "async_sessionmaker[AsyncSession]",
     api_key: str,
-    embedding_model: "SentenceTransformer | None" = None,
 ) -> None:
-    global _SESSION_FACTORY, _API_KEY, _EMBEDDING_MODEL  # noqa: PLW0603
+    global _SESSION_FACTORY, _API_KEY  # noqa: PLW0603
     _SESSION_FACTORY = factory
     _API_KEY = (api_key or "").strip()
-    _EMBEDDING_MODEL = embedding_model
     logger.info(
-        "LLM service initialised (api_key=%s, db=%s, embedding=%s).",
+        "LLM service initialised (api_key=%s, db=%s).",
         "SET" if _API_KEY else "MISSING",
         "YES" if _SESSION_FACTORY else "NO",
-        "YES" if _EMBEDDING_MODEL else "NO",
     )
 
 
@@ -247,14 +242,13 @@ def _deserialize(cached: str) -> AnalysisResult:
 
 
 def _encode_text(text: str) -> list[float] | None:
-    """Generate a 384-d embedding from text using the SentenceTransformer model."""
-    if _EMBEDDING_MODEL is None or not text:
+    """Generate embedding from text using OpenAI embeddings API."""
+    from services.embedding_service import embed_texts_sync
+
+    if not text:
         return None
-    vec = _EMBEDDING_MODEL.encode(
-        [text], batch_size=1, show_progress_bar=False,
-        normalize_embeddings=True, convert_to_numpy=True,
-    )
-    return vec[0].tolist()
+    result = embed_texts_sync([text])
+    return result[0] if result else None
 
 
 # ---------------------------------------------------------------------------

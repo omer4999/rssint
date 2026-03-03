@@ -1,7 +1,7 @@
 """
 Events endpoints.
 
-GET /events/latest  – fetch recent messages, cluster them with sentence
+GET /events/latest  – fetch recent messages, cluster them with OpenAI
                       embeddings, and return ranked EventCluster objects.
 
 Post-processing includes a title-based deduplication pass that collapses
@@ -11,19 +11,16 @@ that slipped past the embedding-level dedup in the LLM service.
 
 import asyncio
 import logging
-from typing import Annotated, TYPE_CHECKING
+from typing import Annotated
 
 import numpy as np
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from repositories import message_repository as repo
 from routes.deps import get_db
 from schemas import EventCard, EventClusterResponse, EventsResponse
 from services.event_clustering_service import EventCluster, cluster_messages
-
-if TYPE_CHECKING:
-    from sentence_transformers import SentenceTransformer
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +65,7 @@ def _cluster_to_response(cluster: EventCluster) -> EventClusterResponse:
 
 def _dedup_responses(
     clusters: list[EventCluster],
-    model: "SentenceTransformer",
+    vecs: np.ndarray,
 ) -> list[EventCluster]:
     """
     Collapse clusters whose titles are semantically near-identical.
@@ -84,15 +81,6 @@ def _dedup_responses(
     """
     if len(clusters) < 2:
         return clusters
-
-    titles = [c.title for c in clusters]
-    vecs = model.encode(
-        titles,
-        batch_size=64,
-        show_progress_bar=False,
-        normalize_embeddings=True,
-        convert_to_numpy=True,
-    )
 
     merged_into: dict[int, int] = {}
 
@@ -157,7 +145,6 @@ def _dedup_responses(
     ),
 )
 async def latest_events(
-    request: Request,
     db: DbSession,
     minutes: int = Query(
         default=30,
@@ -172,23 +159,29 @@ async def latest_events(
         description="Maximum number of event clusters to return (default 500 = all)",
     ),
 ) -> EventsResponse:
-    embedding_model: "SentenceTransformer" = request.app.state.embedding_model
+    from services.embedding_service import embed_texts_sync
 
     raw_messages = await repo.get_recent_messages(db, minutes=minutes)
 
     clusters = await cluster_messages(
         messages=raw_messages,
-        model=embedding_model,
         window_minutes=minutes,
     )
 
     # Post-processing dedup: collapse semantically identical events that
     # slipped past the DB-level dedup (e.g. pre-existing duplicates or
     # clusters generated before the lock was added).
-    loop = asyncio.get_event_loop()
-    clusters = await loop.run_in_executor(
-        None, _dedup_responses, clusters, embedding_model,
-    )
+    if len(clusters) >= 2:
+        titles = [c.title for c in clusters]
+        vecs = np.array(
+            embed_texts_sync(titles),
+            dtype=np.float32,
+        )
+        if vecs.size > 0:
+            loop = asyncio.get_event_loop()
+            clusters = await loop.run_in_executor(
+                None, _dedup_responses, clusters, vecs,
+            )
 
     top_clusters = clusters[:limit]
     response_clusters = [_cluster_to_response(c) for c in top_clusters]

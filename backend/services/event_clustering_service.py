@@ -8,8 +8,8 @@ Pipeline
 --------
 1. Pre-filter        : keep only messages from the last ``window_minutes`` that
                        pass the keyword relevance check, up to ``MAX_MESSAGES``.
-2. Embed             : encode all filtered texts in a single batched call to the
-                       SentenceTransformer model (no repeated inference).
+2. Embed             : encode all filtered texts via OpenAI embeddings API
+                       (batched, with local cache for repeated messages).
 3. Level-1 (Macro)   : greedy clustering with MACRO_SIM_THRESHOLD (0.80) AND a
                        30-minute time gate.  Groups broadly related messages
                        into macro-topics.
@@ -34,8 +34,7 @@ Pipeline
 7. Sort              : all EventClusters ordered by source_count DESC,
                        last_seen DESC.
 
-CPU-intensive work (embedding + similarity matrices) runs inside
-``asyncio.get_event_loop().run_in_executor`` so the event loop is never blocked.
+Embedding is fetched via OpenAI API (async). Similarity matrices use numpy.
 """
 
 from __future__ import annotations
@@ -52,15 +51,22 @@ from functools import partial
 from typing import TYPE_CHECKING
 
 import numpy as np
-from sklearn.metrics.pairwise import cosine_similarity
 
 from models import Message
 from services.relevance_service import is_relevant
 
 if TYPE_CHECKING:
-    from sentence_transformers import SentenceTransformer
+    pass
 
 logger = logging.getLogger(__name__)
+
+
+def _cosine_similarity_matrix(X: np.ndarray) -> np.ndarray:
+    """Pairwise cosine similarity for L2-normalized rows. Returns (n,n) matrix."""
+    norms = np.linalg.norm(X, axis=1, keepdims=True)
+    norms[norms == 0] = 1
+    X_norm = X / norms
+    return np.dot(X_norm, X_norm.T)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -105,10 +111,10 @@ _MARKDOWN_RE: re.Pattern[str] = re.compile(r"[*_`~#>|\\]")
 # Embedding cache
 # ---------------------------------------------------------------------------
 # Telegram messages are immutable once stored, so (channel_name, message_id)
-# is a stable key.  Caching avoids re-running the SentenceTransformer model on
+# is a stable key.  Caching avoids re-calling the OpenAI embeddings API for
 # messages already seen in a previous request or polling cycle.
 #
-# Memory estimate: 10 000 entries × 384 floats × 4 bytes ≈ 15 MB — negligible.
+# Memory estimate: 10 000 entries × 1536 floats × 4 bytes ≈ 60 MB — acceptable.
 # The lock protects the eviction logic from concurrent executor threads.
 
 _EmbeddingKey = tuple[str, int]  # (channel_name, message_id)
@@ -289,39 +295,39 @@ def _pre_filter(
     return candidates
 
 
-def _compute_embeddings(
-    messages: list[Message],
-    model: "SentenceTransformer",
-) -> np.ndarray:
+async def _compute_embeddings(messages: list[Message]) -> np.ndarray:
     """
     Return an (N, D) embedding matrix for *messages*, serving cached vectors
-    where available and batching only the uncached remainder.
+    where available and calling OpenAI API for the uncached remainder.
 
     Cache key: ``(channel_name, message_id)`` — unique and stable for every
     Telegram message.  The returned matrix row order matches *messages* order.
     """
+    from services.embedding_service import embed_texts_sync
+
     keys: list[_EmbeddingKey] = [(m.channel_name, m.message_id) for m in messages]
 
     with _CACHE_LOCK:
         uncached_indices = [i for i, k in enumerate(keys) if k not in _EMBEDDING_CACHE]
 
     if uncached_indices:
-        uncached_texts: list[str] = [messages[i].text for i in uncached_indices]  # type: ignore[misc]
-        new_vecs: np.ndarray = model.encode(
-            uncached_texts,
-            batch_size=64,
-            show_progress_bar=False,
-            normalize_embeddings=True,
-            convert_to_numpy=True,
+        uncached_texts = [
+            (messages[i].text or " ")[:8191] for i in uncached_indices
+        ]
+        loop = asyncio.get_event_loop()
+        new_vecs_list: list[list[float]] = await loop.run_in_executor(
+            None, embed_texts_sync, uncached_texts
         )
+        new_vecs = np.array(new_vecs_list, dtype=np.float32) if new_vecs_list else np.zeros((0, 1536))
+
         with _CACHE_LOCK:
-            # Evict oldest entries if the cache would overflow.
             overflow = (len(_EMBEDDING_CACHE) + len(uncached_indices)) - _MAX_CACHE_SIZE
             if overflow > 0:
                 for old_key in list(_EMBEDDING_CACHE.keys())[:overflow]:
                     del _EMBEDDING_CACHE[old_key]
             for local_i, global_i in enumerate(uncached_indices):
-                _EMBEDDING_CACHE[keys[global_i]] = new_vecs[local_i]
+                if local_i < len(new_vecs):
+                    _EMBEDDING_CACHE[keys[global_i]] = new_vecs[local_i]
 
         logger.debug(
             "Embedding cache: %d new / %d from cache (total cached: %d).",
@@ -334,7 +340,6 @@ def _compute_embeddings(
             "Embedding cache: all %d messages served from cache.", len(messages)
         )
 
-    # Reconstruct the full matrix in the original message order.
     with _CACHE_LOCK:
         result = np.stack([_EMBEDDING_CACHE[k] for k in keys])
     return result
@@ -354,7 +359,7 @@ def _deduplicate_display_messages(
     if k <= 1:
         return members
 
-    sim: np.ndarray = cosine_similarity(member_embeddings)
+    sim: np.ndarray = _cosine_similarity_matrix(member_embeddings)
     keep: list[bool] = [True] * k
 
     for i in range(k):
@@ -446,7 +451,8 @@ def _semantic_dedup_messages(
             continue
 
         # cosine_similarity expects 2-D arrays; result shape is (1, len(unique)).
-        sims: np.ndarray = cosine_similarity([emb], unique_embeddings)[0]
+        stacked = np.vstack(unique_embeddings)
+        sims = np.dot(emb, stacked.T) if stacked.size > 0 else np.array([])
         if float(sims.max()) < SEMANTIC_DEDUP_THRESHOLD:
             unique_messages.append(msg)
             unique_embeddings.append(emb)
@@ -586,7 +592,7 @@ def _macro_greedy_pass(
     if n == 0:
         return []
 
-    sim_matrix: np.ndarray = cosine_similarity(embeddings)
+    sim_matrix: np.ndarray = _cosine_similarity_matrix(embeddings)
     assigned: list[bool] = [False] * n
     groups: list[_RawGroup] = []
 
@@ -670,7 +676,7 @@ def _embedding_sub_cluster(
         return [_RawGroup(members=members, indices=global_indices)]
 
     sub_embeddings: np.ndarray = global_embeddings[global_indices]
-    sim_matrix: np.ndarray = cosine_similarity(sub_embeddings)
+    sim_matrix: np.ndarray = _cosine_similarity_matrix(sub_embeddings)
 
     assigned: list[bool] = [False] * k
     sub_groups: list[_RawGroup] = []
@@ -835,7 +841,7 @@ def _centroid_merge_pass(
        sub-cluster, producing a list of ``_CentroidGroup`` objects.
     2. Iterate over each incoming group:
          - Compare its centroid against every already-merged group using
-           ``sklearn.metrics.pairwise.cosine_similarity``.
+           numpy-based cosine similarity.
          - If the best matching merged group satisfies BOTH:
                cosine_similarity(centroid_A, centroid_B) >= CENTROID_MERGE_THRESHOLD
                AND |first_seen_A − first_seen_B| <= MAX_TIME_DIFF_SECONDS
@@ -882,13 +888,9 @@ def _centroid_merge_pass(
         best_sim: float = -1.0
 
         for j, existing in enumerate(merged):
-            # sklearn cosine_similarity expects 2-D arrays.
-            sim: float = float(
-                cosine_similarity(
-                    incoming.centroid.reshape(1, -1),
-                    existing.centroid.reshape(1, -1),
-                )[0, 0]
-            )
+            a, b = incoming.centroid, existing.centroid
+            na, nb = np.linalg.norm(a), np.linalg.norm(b)
+            sim = float(np.dot(a, b) / (na * nb)) if (na > 0 and nb > 0) else 0.0
             time_diff: float = abs(
                 (incoming.first_seen - existing.first_seen).total_seconds()
             )
@@ -996,25 +998,18 @@ def _enrich_group(
 
 
 def _run_clustering_sync(
-    messages: list[Message],
-    model: "SentenceTransformer",
-    window_minutes: int,
+    filtered: list[Message],
+    embeddings: np.ndarray,
 ) -> list[EventCluster]:
     """
-    Full synchronous hybrid clustering pipeline.
+    Synchronous hybrid clustering pipeline (embeddings pre-computed).
 
     Intended to be called via ``run_in_executor`` — never call directly from
     an async context.
     """
-    filtered = _pre_filter(messages, window_minutes)
-
-    if not filtered:
-        logger.debug("No relevant messages after pre-filtering; returning empty.")
+    if not filtered or embeddings.size == 0:
         return []
 
-    logger.debug("Computing embeddings for %d messages (cache active)…", len(filtered))
-
-    embeddings: np.ndarray = _compute_embeddings(filtered, model)
     logger.debug("Embeddings shape: %s", embeddings.shape)
 
     # --- Level 1: macro clustering (similarity + time gate) ---
@@ -1118,25 +1113,20 @@ async def _add_summaries(
 
 async def cluster_messages(
     messages: list[Message],
-    model: "SentenceTransformer",
     window_minutes: int = DEFAULT_WINDOW_MINUTES,
 ) -> list[EventCluster]:
     """
     Async entry point for the hybrid clustering pipeline.
 
-    Offloads all CPU-bound work (embedding inference, similarity matrices,
-    fingerprint extraction) to the default thread-pool executor so the
-    event loop stays responsive.  After clustering completes, LLM-generated
-    (or rule-based) summaries are added to every cluster via ``llm_service``.
+    Fetches embeddings via OpenAI API, then runs CPU-bound clustering (similarity
+    matrices, fingerprint extraction) in executor. After clustering completes,
+    LLM-generated (or rule-based) summaries are added via ``llm_service``.
 
     Parameters
     ----------
     messages:
         Raw ORM ``Message`` objects from the database.  May include irrelevant
         or out-of-window messages; the service filters them internally.
-    model:
-        SentenceTransformer instance loaded once at application startup
-        (``app.state.embedding_model``).
     window_minutes:
         How far back (in minutes) to consider messages.
 
@@ -1146,8 +1136,17 @@ async def cluster_messages(
         All sub-event clusters sorted by ``last_seen`` DESC — most-recent
         events first.  Each cluster carries a ``summary`` field.
     """
+    filtered = _pre_filter(messages, window_minutes)
+    if not filtered:
+        logger.debug("No relevant messages after pre-filtering; returning empty.")
+        return []
+
+    embeddings = await _compute_embeddings(filtered)
+    if embeddings.size == 0:
+        return []
+
     loop = asyncio.get_event_loop()
-    sync_fn = partial(_run_clustering_sync, messages, model, window_minutes)
+    sync_fn = partial(_run_clustering_sync, filtered, embeddings)
     clusters: list[EventCluster] = await loop.run_in_executor(None, sync_fn)
 
     clusters.sort(key=lambda c: c.first_seen, reverse=True)
