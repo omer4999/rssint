@@ -138,6 +138,15 @@ class HealthResponse(BaseModel):
     events_24h: int | None = Field(None, description="Events in last 24h (when ?db=1)")
 
 
+class DiagnosticsResponse(BaseModel):
+    """DB and ingestion diagnostics for deployment debugging."""
+
+    messages_total: int = Field(0, description="Total messages in DB (all time)")
+    events_total: int = Field(0, description="Total events in DB (all time)")
+    telegram_ingest_enabled: bool = Field(False, description="ENABLE_TELEGRAM_INGEST")
+    hint: str = Field("", description="Suggested fix when DB is empty")
+
+
 # ---------------------------------------------------------------------------
 # Ingestion report schema (used in logs / future API)
 # ---------------------------------------------------------------------------

@@ -4,7 +4,16 @@ All settings are validated and typed using Pydantic Settings.
 """
 
 from pathlib import Path
+
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def _ensure_asyncpg_url(url: str) -> str:
+    """Convert postgresql:// to postgresql+asyncpg:// for Railway/Heroku."""
+    if url.startswith("postgresql://") and "+asyncpg" not in url:
+        return url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    return url
 
 
 class Settings(BaseSettings):
@@ -22,6 +31,11 @@ class Settings(BaseSettings):
 
     # --- Database ---
     database_url: str
+
+    @field_validator("database_url", mode="before")
+    @classmethod
+    def database_url_asyncpg(cls, v: str) -> str:
+        return _ensure_asyncpg_url(v)
 
     # --- Ingestion ---
     ingest_interval_seconds: int = 60

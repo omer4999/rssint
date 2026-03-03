@@ -29,7 +29,7 @@ from database import Base, build_engine, build_session_factory
 from routes import analysis, brief, developments, events, messages
 from routes.deps import get_db
 from sqlalchemy.ext.asyncio import AsyncSession
-from schemas import HealthResponse
+from schemas import DiagnosticsResponse, HealthResponse
 from services.telegram_service import TelegramService
 from telegram_ingest import run_ingestion_loop
 
@@ -235,6 +235,37 @@ def create_app() -> FastAPI:
             status="ok",
             messages_24h=msg_count or 0,
             events_24h=ev_count or 0,
+        )
+
+    @app.get(
+        "/diagnostics",
+        response_model=DiagnosticsResponse,
+        summary="DB diagnostics (debug)",
+        tags=["System"],
+    )
+    async def diagnostics(session: AsyncSession = Depends(get_db)) -> DiagnosticsResponse:
+        """Return DB counts and ingestion status. Use to debug empty Railway DB."""
+        from sqlalchemy import func, select
+
+        from models import Message, StructuredEvent
+
+        msg_total = (await session.execute(select(func.count()).select_from(Message))).scalar_one() or 0
+        ev_total = (await session.execute(select(func.count()).select_from(StructuredEvent))).scalar_one() or 0
+        telegram_enabled = os.getenv("ENABLE_TELEGRAM_INGEST", "false").lower() == "true"
+
+        hint = ""
+        if msg_total == 0 and ev_total == 0:
+            hint = (
+                "Database is empty. Fix: (1) Set ENABLE_TELEGRAM_INGEST=true on Railway "
+                "to ingest messages, or (2) Use the same DATABASE_URL as local so both "
+                "share data."
+            )
+
+        return DiagnosticsResponse(
+            messages_total=msg_total,
+            events_total=ev_total,
+            telegram_ingest_enabled=telegram_enabled,
+            hint=hint,
         )
 
     return app
