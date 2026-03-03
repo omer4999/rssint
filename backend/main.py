@@ -15,7 +15,7 @@ Shutdown sequence:
 2. Disconnect the Telegram client.
 3. Dispose the database engine.
 """
-
+import os
 import asyncio
 import logging
 import sys
@@ -91,7 +91,8 @@ def create_app() -> FastAPI:
             settings=settings,
             session_factory=session_factory,
         )
-        await telegram_service.connect()
+        if os.getenv("ENABLE_TELEGRAM_INGEST", "false") == "true":
+            await telegram_service.connect()
 
         ingestion_task = asyncio.create_task(
             run_ingestion_loop(telegram_service, settings),
