@@ -21,8 +21,8 @@ import logging
 import sys
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI
 
 from config import Settings, get_settings
 from database import Base, build_engine, build_session_factory
@@ -172,10 +172,18 @@ def create_app() -> FastAPI:
         version="0.3.0",
         lifespan=lifespan,
     )
-    
+
+    # CORS: allow Vercel (production + preview URLs) and localhost
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["https://rssinttest.vercel.app/","https://rssinttest-omer4999s-projects.vercel.app/","rssinttest-git-main-omer4999s-projects.vercel.app","https://rssinttest-a9lxhrhqy-omer4999s-projects.vercel.app"],
+        allow_origins=[
+            "https://rssinttest.vercel.app",
+            "https://rssinttest-omer4999s-projects.vercel.app",
+            "https://rssinttest-git-main-omer4999s-projects.vercel.app",
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+        ],
+        allow_origin_regex=r"https://.*\.vercel\.app$",
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
