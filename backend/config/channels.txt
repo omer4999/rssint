@@ -1,0 +1,15 @@
+# RSSINT – Monitored Telegram channels
+# Add one channel username (or numeric ID) per line.
+# Lines starting with '#' are ignored.
+# Example entries (replace with real channel names):
+
+abualiexpress
+israelhayomofficial
+baznews9
+News_il_h
+salehdesk1
+amitsegal
+yediotnews25
+arabworld301news
+ramreports
+MyGPLANET

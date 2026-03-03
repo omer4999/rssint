@@ -1,0 +1,19 @@
+# Environment & secrets
+.env
+*.session
+*.session-journal
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+
+# Alembic
+alembic/versions/__pycache__/

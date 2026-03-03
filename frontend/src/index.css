@@ -1,0 +1,75 @@
+@import "tailwindcss";
+
+@theme {
+  --color-bg-base: #0f1115;
+  --color-bg-card: #161a21;
+  --color-border: #242a35;
+  --color-text-primary: #e6edf3;
+  --color-text-secondary: #9aa4b2;
+  --color-accent-blue: #4ea1ff;
+  --color-accent-green: #3fb950;
+  --color-accent-yellow: #d29922;
+  --color-accent-red: #f85149;
+}
+
+@layer base {
+  html,
+  body {
+    background-color: var(--color-bg-base);
+    color: var(--color-text-primary);
+    font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo,
+      Consolas, monospace;
+  }
+
+  body {
+    font-family: "Inter", sans-serif;
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  ::-webkit-scrollbar {
+    width: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: var(--color-bg-base);
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--color-border);
+    border-radius: 3px;
+  }
+}
+
+@keyframes pulse-dot {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.25;
+  }
+}
+
+.live-dot {
+  animation: pulse-dot 1.5s ease-in-out infinite;
+}
+
+/* New-event entrance: blue border glow that fades out over 2.5 s */
+@keyframes event-new-glow {
+  0% {
+    box-shadow: 0 0 0 2px rgba(78, 161, 255, 0.55),
+      0 0 20px rgba(78, 161, 255, 0.12);
+  }
+  60% {
+    box-shadow: 0 0 0 1px rgba(78, 161, 255, 0.2),
+      0 0 8px rgba(78, 161, 255, 0.04);
+  }
+  100% {
+    box-shadow: none;
+  }
+}
+
+.event-card-new {
+  animation: event-new-glow 2.5s ease-out forwards;
+}
