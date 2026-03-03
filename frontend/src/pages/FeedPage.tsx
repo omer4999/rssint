@@ -3,8 +3,8 @@ import { useEvents } from "../hooks/useEvents";
 import EventCard from "../components/EventCard";
 import { formatLocalDate } from "../utils/time";
 
-/** Feed always shows events from the last hour; no time filter. */
-const FEED_WINDOW_MINUTES = 60;
+/** Feed shows events from the last 6 hours for better coverage. */
+const FEED_WINDOW_MINUTES = 360;
 
 interface FeedPageProps {
   /** Callback fired whenever a successful poll completes. */
@@ -42,7 +42,7 @@ const FeedPage: FC<FeedPageProps> = ({ onLastUpdated }) => {
               >
                 {total}
               </span>{" "}
-              event{total !== 1 ? "s" : ""} in the last hour
+              event{total !== 1 ? "s" : ""} in the last 6 hours
               {/* Inline "Refreshing" badge — shown immediately on window change */}
               {isRefreshing && (
                 <span
@@ -94,7 +94,7 @@ const FeedPage: FC<FeedPageProps> = ({ onLastUpdated }) => {
           className="text-center py-20 text-sm"
           style={{ color: "var(--color-text-secondary)" }}
         >
-          No relevant events in the last hour.
+          No relevant events in the last 6 hours.
         </div>
       )}
 

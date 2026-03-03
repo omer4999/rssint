@@ -21,12 +21,14 @@ import logging
 import sys
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi import FastAPI
 
 from config import Settings, get_settings
 from database import Base, build_engine, build_session_factory
 from routes import analysis, brief, developments, events, messages
+from routes.deps import get_db
+from sqlalchemy.ext.asyncio import AsyncSession
 from schemas import HealthResponse
 from services.telegram_service import TelegramService
 from telegram_ingest import run_ingestion_loop
@@ -201,9 +203,39 @@ def create_app() -> FastAPI:
         summary="Health check",
         tags=["System"],
     )
-    async def health() -> HealthResponse:
-        """Return a simple liveness probe response."""
-        return HealthResponse(status="ok")
+    async def health(
+        session: AsyncSession = Depends(get_db),
+        include_db: str | None = None,
+    ) -> HealthResponse:
+        """Return liveness. Add ?include_db=1 for message/event counts (debug)."""
+        if include_db != "1":
+            return HealthResponse(status="ok")
+        from datetime import datetime, timedelta, timezone
+
+        from sqlalchemy import func, select
+
+        from models import Message, StructuredEvent
+
+        cutoff = datetime.now(tz=timezone.utc) - timedelta(hours=24)
+        msg_count = (
+            await session.execute(
+                select(func.count()).select_from(Message).where(
+                    Message.timestamp >= cutoff
+                )
+            )
+        ).scalar_one()
+        ev_count = (
+            await session.execute(
+                select(func.count()).select_from(StructuredEvent).where(
+                    StructuredEvent.created_at >= cutoff
+                )
+            )
+        ).scalar_one()
+        return HealthResponse(
+            status="ok",
+            messages_24h=msg_count or 0,
+            events_24h=ev_count or 0,
+        )
 
     return app
 

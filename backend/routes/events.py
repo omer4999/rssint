@@ -35,7 +35,6 @@ router = APIRouter(prefix="/events", tags=["Events"])
 DbSession = Annotated[AsyncSession, Depends(get_db)]
 
 _RESPONSE_DEDUP_THRESHOLD: float = 0.78
-_FALLBACK_EVENT_HOURS: int = 24
 
 
 def _structured_event_to_cluster(ev: StructuredEvent) -> EventCluster:
@@ -205,10 +204,12 @@ async def latest_events(
 
     # Fallback: no clusters (e.g. no messages, or all filtered by relevance).
     # Serve pre-computed events from the DB so the feed is not empty.
+    # Match the requested window (e.g. 6h for feed) so UI text is accurate.
     if not clusters:
+        fallback_hours = max(6, minutes // 60)
         db_events = await event_repo.get_recent_events(
             db,
-            hours=_FALLBACK_EVENT_HOURS,
+            hours=fallback_hours,
             limit=limit,
         )
         clusters = [_structured_event_to_cluster(ev) for ev in db_events]

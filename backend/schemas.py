@@ -134,6 +134,8 @@ class HealthResponse(BaseModel):
     """Response body for the /health endpoint."""
 
     status: str = Field("ok", description="Service health status")
+    messages_24h: int | None = Field(None, description="Messages in last 24h (when ?db=1)")
+    events_24h: int | None = Field(None, description="Events in last 24h (when ?db=1)")
 
 
 # ---------------------------------------------------------------------------
