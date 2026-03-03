@@ -17,10 +17,16 @@ import numpy as np
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from models import StructuredEvent
+from repositories import event_repository as event_repo
 from repositories import message_repository as repo
 from routes.deps import get_db
 from schemas import EventCard, EventClusterResponse, EventsResponse
-from services.event_clustering_service import EventCluster, cluster_messages
+from services.event_clustering_service import (
+    ClusteredMessage,
+    EventCluster,
+    cluster_messages,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +35,35 @@ router = APIRouter(prefix="/events", tags=["Events"])
 DbSession = Annotated[AsyncSession, Depends(get_db)]
 
 _RESPONSE_DEDUP_THRESHOLD: float = 0.78
+_FALLBACK_EVENT_HOURS: int = 24
+
+
+def _structured_event_to_cluster(ev: StructuredEvent) -> EventCluster:
+    """Convert a persisted StructuredEvent to EventCluster for API response."""
+    ts = ev.first_seen or ev.created_at
+    return EventCluster(
+        event_id=ev.id,
+        title=ev.title or "(No title)",
+        summary=ev.summary or "",
+        event_type=ev.event_type or "unknown",
+        actors=ev.actors or [],
+        locations=ev.locations or [],
+        impact_level=ev.impact_level or "low",
+        confidence=ev.confidence or 0.0,
+        source_count=ev.development_source_count or 1,
+        channels=["(stored)"],
+        first_seen=ts,
+        last_seen=ev.last_seen or ts,
+        messages=[
+            ClusteredMessage(
+                channel="(stored)",
+                message_id=0,
+                text=ev.summary or ev.title or "",
+                timestamp=ts,
+                url="",
+            )
+        ],
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -167,6 +202,27 @@ async def latest_events(
         messages=raw_messages,
         window_minutes=minutes,
     )
+
+    # Fallback: no clusters (e.g. no messages, or all filtered by relevance).
+    # Serve pre-computed events from the DB so the feed is not empty.
+    if not clusters:
+        db_events = await event_repo.get_recent_events(
+            db,
+            hours=_FALLBACK_EVENT_HOURS,
+            limit=limit,
+        )
+        clusters = [_structured_event_to_cluster(ev) for ev in db_events]
+        clusters.sort(
+            key=lambda c: (
+                -c.source_count,
+                -(c.last_seen.timestamp() if c.last_seen else 0),
+            )
+        )
+        if clusters:
+            logger.info(
+                "No clusters from messages; serving %d events from DB fallback.",
+                len(clusters),
+            )
 
     # Post-processing dedup: collapse semantically identical events that
     # slipped past the DB-level dedup (e.g. pre-existing duplicates or
