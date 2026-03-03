@@ -173,18 +173,10 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
-    # CORS: allow Vercel (production + preview URLs) and localhost
+    # CORS: allow all origins (frontend doesn't send credentials)
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=[
-            "https://rssinttest.vercel.app",
-            "https://rssinttest-omer4999s-projects.vercel.app",
-            "https://rssinttest-git-main-omer4999s-projects.vercel.app",
-            "http://localhost:5173",
-            "http://127.0.0.1:5173",
-        ],
-        allow_origin_regex=r"https://.*\.vercel\.app$",
-        allow_credentials=True,
+        allow_origins=["*"],
         allow_methods=["*"],
         allow_headers=["*"],
     )
