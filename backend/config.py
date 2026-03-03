@@ -25,7 +25,7 @@ class Settings(BaseSettings):
 
     # --- Ingestion ---
     ingest_interval_seconds: int = 60
-
+    enable_telegram_ingest: bool = True
     # --- OpenAI ---
     openai_api_key: str | None = None
 

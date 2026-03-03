@@ -175,7 +175,7 @@ def create_app() -> FastAPI:
     
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["https://rssinttest.vercel.app/"],
+        allow_origins=["https://rssinttest.vercel.app/","https://rssinttest-omer4999s-projects.vercel.app/","rssinttest-git-main-omer4999s-projects.vercel.app","https://rssinttest-a9lxhrhqy-omer4999s-projects.vercel.app"],
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
