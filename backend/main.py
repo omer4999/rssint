@@ -21,7 +21,7 @@ import logging
 import sys
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi import FastAPI
 
 from config import Settings, get_settings
@@ -171,6 +171,14 @@ def create_app() -> FastAPI:
         ),
         version="0.3.0",
         lifespan=lifespan,
+    )
+    
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
     )
 
     # -----------------------------------------------------------------------
