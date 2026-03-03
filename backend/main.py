@@ -21,8 +21,8 @@ import logging
 import sys
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from config import Settings, get_settings
 from database import Base, build_engine, build_session_factory
@@ -175,7 +175,7 @@ def create_app() -> FastAPI:
     
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=["https://rssinttest.vercel.app/"],
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
